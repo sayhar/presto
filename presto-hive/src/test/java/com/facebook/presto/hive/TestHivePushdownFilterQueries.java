@@ -38,7 +38,7 @@ public class TestHivePushdownFilterQueries
     private static final Pattern ARRAY_SUBSCRIPT_PATTERN = Pattern.compile("([a-z_+]+)((\\[[0-9]+\\])+)");
 
     private static final String WITH_LINEITEM_EX = "WITH lineitem_ex AS (\n" +
-            "SELECT linenumber, orderkey, partkey, suppkey, \n" +
+            "SELECT linenumber, orderkey, partkey, suppkey, quantity, extendedprice, tax, \n" +
             "   CASE WHEN linenumber % 5 = 0 THEN null ELSE shipmode = 'AIR' END AS ship_by_air, \n" +
             "   CASE WHEN linenumber % 7 = 0 THEN null ELSE returnflag = 'R' END AS is_returned, \n" +
             "   CASE WHEN linenumber % 4 = 0 THEN null ELSE CAST(day(shipdate) AS TINYINT) END AS ship_day, " +
@@ -48,6 +48,7 @@ public class TestHivePushdownFilterQueries
             "   CASE WHEN orderkey % 5 = 0 THEN null ELSE CAST(discount AS REAL) END AS discount_real, \n" +
             "   CASE WHEN orderkey % 7 = 0 THEN null ELSE CAST(tax AS REAL) END AS tax_real, \n" +
             "   CASE WHEN orderkey % 11 = 0 THEN null ELSE (orderkey, partkey, suppkey) END AS keys, \n" +
+            "   CASE WHEN orderkey % 11 = 0 THEN (null, discount, null) ELSE (extendedprice, discount, null) END AS keys_double, \n" +
             "   CASE WHEN orderkey % 13 = 0 THEN null ELSE ((orderkey, partkey), (suppkey,), CASE WHEN orderkey % 17 = 0 THEN null ELSE (orderkey, partkey) END) END AS nested_keys, \n" +
             "   CASE WHEN orderkey % 17 = 0 THEN null ELSE (shipmode = 'AIR', returnflag = 'R') END as flags, \n" +
             "   CASE WHEN orderkey % 19 = 0 THEN null ELSE (CAST(discount AS REAL), CAST(tax AS REAL)) END as reals, \n" +
@@ -55,7 +56,8 @@ public class TestHivePushdownFilterQueries
             "   CASE WHEN orderkey % 31 = 0 THEN null ELSE (" +
             "       (CAST(day(shipdate) AS TINYINT), CAST(month(shipdate) AS TINYINT), CAST(year(shipdate) AS INTEGER)), " +
             "       (CAST(day(commitdate) AS TINYINT), CAST(month(commitdate) AS TINYINT), CAST(year(commitdate) AS INTEGER)), " +
-            "       (CAST(day(receiptdate) AS TINYINT), CAST(month(receiptdate) AS TINYINT), CAST(year(receiptdate) AS INTEGER))) END AS dates \n" +
+            "       (CAST(day(receiptdate) AS TINYINT), CAST(month(receiptdate) AS TINYINT), CAST(year(receiptdate) AS INTEGER))) END AS dates, \n" +
+            "   CASE WHEN partkey % 31  = 0 THEN null ELSE discount END as discount \n" +
             "FROM lineitem)\n";
 
     protected TestHivePushdownFilterQueries()
@@ -73,8 +75,8 @@ public class TestHivePushdownFilterQueries
                 Optional.empty());
 
         queryRunner.execute(noPushdownFilter(queryRunner.getDefaultSession()),
-                "CREATE TABLE lineitem_ex (linenumber, orderkey, partkey, suppkey, ship_by_air, is_returned, ship_day, ship_month, ship_timestamp, commit_timestamp, discount_real, tax_real, keys, nested_keys, flags, reals, info, dates) AS " +
-                        "SELECT linenumber, orderkey, partkey, suppkey, " +
+                "CREATE TABLE lineitem_ex (linenumber, orderkey, partkey, suppkey, quantity, extendedprice, tax, ship_by_air, is_returned, ship_day, ship_month, ship_timestamp, commit_timestamp, discount_real, tax_real, keys, keys_double, nested_keys, flags, reals, info, dates, discount) AS " +
+                        "SELECT linenumber, orderkey, partkey, suppkey, quantity, extendedprice, tax, " +
                         "   IF (linenumber % 5 = 0, null, shipmode = 'AIR') AS ship_by_air, " +
                         "   IF (linenumber % 7 = 0, null, returnflag = 'R') AS is_returned, " +
                         "   IF (linenumber % 4 = 0, null, CAST(day(shipdate) AS TINYINT)) AS ship_day, " +
@@ -84,6 +86,7 @@ public class TestHivePushdownFilterQueries
                         "   IF (orderkey % 5 = 0, null, CAST(discount AS REAL)) AS discount_real, " +
                         "   IF (orderkey % 7 = 0, null, CAST(tax AS REAL)) AS tax_real, " +
                         "   IF (orderkey % 11 = 0, null, ARRAY[orderkey, partkey, suppkey]), " +
+                        "   IF (orderkey % 11 = 0, ARRAY[null, discount, null], ARRAY[extendedprice, discount, null]), " +
                         "   IF (orderkey % 13 = 0, null, ARRAY[ARRAY[orderkey, partkey], ARRAY[suppkey], IF (orderkey % 17 = 0, null, ARRAY[orderkey, partkey])]), " +
                         "   IF (orderkey % 17 = 0, null, ARRAY[shipmode = 'AIR', returnflag = 'R']), " +
                         "   IF (orderkey % 19 = 0, null, ARRAY[CAST(discount AS REAL), CAST(tax AS REAL)]), " +
@@ -92,9 +95,9 @@ public class TestHivePushdownFilterQueries
                         "   IF (orderkey % 31 = 0, NULL, ARRAY[" +
                         "       CAST(ROW(day(shipdate), month(shipdate), year(shipdate)) AS ROW(day TINYINT, month TINYINT, year INTEGER)), " +
                         "       CAST(ROW(day(commitdate), month(commitdate), year(commitdate)) AS ROW(day TINYINT, month TINYINT, year INTEGER)), " +
-                        "       CAST(ROW(day(receiptdate), month(receiptdate), year(receiptdate)) AS ROW(day TINYINT, month TINYINT, year INTEGER))]) " +
+                        "       CAST(ROW(day(receiptdate), month(receiptdate), year(receiptdate)) AS ROW(day TINYINT, month TINYINT, year INTEGER))]), " +
+                        "   IF (partkey % 31  = 0, null, discount) " +
                         "FROM lineitem");
-
         return queryRunner;
     }
 
@@ -186,6 +189,62 @@ public class TestHivePushdownFilterQueries
         assertQueryReturnsEmptyResult("SELECT commit_timestamp, ship_timestamp FROM lineitem_ex WHERE year(ship_timestamp) - year(commit_timestamp) > 1");
 
         assertQueryUsingH2Cte("SELECT commit_timestamp, ship_timestamp, orderkey FROM lineitem_ex WHERE year(commit_timestamp) > 1993 and year(ship_timestamp) > 1993 and year(ship_timestamp) - year(commit_timestamp) = 1");
+    }
+
+    @Test
+    public void testDouble()
+    {
+        // Nulls
+        assertQueryUsingH2Cte("SELECT count(*) FROM lineitem_ex WHERE discount is null");
+
+        assertQueryUsingH2Cte("SELECT count(discount) FROM lineitem_ex");
+
+        assertQueryUsingH2Cte("SELECT sum(quantity), sum(discount) FROM lineitem_ex WHERE discount is not null");
+
+        assertQueryUsingH2Cte("SELECT quantity * (1 - discount) * (1 + tax), discount * quantity FROM lineitem_ex WHERE is_returned = true");
+
+        // Basic
+        assertQuery("SELECT quantity, extendedprice, discount, tax FROM lineitem");
+
+        assertQuery("SELECT quantity, extendedprice, discount, tax FROM lineitem WHERE quantity = 4");
+
+        assertQuery("SELECT quantity, extendedprice, discount, tax FROM lineitem WHERE quantity = 4 AND discount = 0");
+
+        assertQueryUsingH2Cte("SELECT quantity, extendedprice, discount, tax FROM lineitem_ex WHERE quantity = 4 AND discount = 0 AND tax=.05");
+
+        assertQueryUsingH2Cte("SELECT quantity, extendedprice, discount, orderkey, partkey, suppkey FROM lineitem_ex WHERE quantity = 4 AND discount = 0 AND tax=.05");
+
+        // Inequality and functional predicates
+        assertQuery("SELECT quantity, extendedprice, discount, tax, orderkey, partkey, suppkey FROM lineitem WHERE quantity > 4 AND discount = 0 AND tax=.05");
+
+        assertQueryUsingH2Cte("SELECT quantity, discount, tax, orderkey, partkey, suppkey FROM lineitem_ex WHERE quantity > 4 AND discount > 0 AND tax<.05");
+
+        assertQueryUsingH2Cte("SELECT quantity, extendedprice, tax, orderkey, partkey, suppkey FROM lineitem_ex WHERE (discount + tax) < (quantity / 10)");
+
+        assertQueryUsingH2Cte("SELECT quantity, extendedprice, discount, orderkey, partkey, suppkey FROM lineitem_ex WHERE (discount + tax) < (quantity / 10) OR orderkey * 1.0 / partkey % suppkey < (tax + discount) * 100");
+
+        // project and filter data
+        // tax reader reads selected positions with no filter; discount reader reads all positions with filter
+        assertFilterProject("discount < 0", "tax");
+
+        assertFilterProject("discount = 0", "tax");
+
+        assertFilterProject("discount < tax", "quantity");
+
+        assertFilterProject("discount < tax AND extendedprice > 1500", "extendedprice");
+
+        assertFilterProject("discount < tax AND discount > .01 AND tax > .01", "tax");
+
+        assertFilterProject("discount + 0.01 < tax AND discount > .01 AND tax > .01", "tax");
+
+        assertFilterProject("discount + tax  > .05 AND discount > .01 AND tax > .01", "tax");
+
+        // Arrays / non-deterministic
+        assertFilterProject("keys_double[1] > 0.01", "count(*)");
+
+        assertFilterProject("discount IS NULL AND keys_double[1] * discount > 0.01", "count(*)");
+
+        assertFilterProject("keys_double[2] IS NOT NULL AND keys_double[1] is NULL", "keys_double[2]");
     }
 
     @Test

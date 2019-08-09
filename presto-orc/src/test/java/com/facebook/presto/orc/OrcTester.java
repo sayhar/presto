@@ -298,6 +298,10 @@ public class OrcTester
         orcTester.formats = ImmutableSet.of(ORC_12, ORC_11, DWRF);
         orcTester.compressions = ImmutableSet.of(ZLIB);
         orcTester.useSelectiveOrcReader = true;
+        orcTester.reverseTestsEnabled = true;
+        orcTester.missingStructFieldsTestsEnabled = true;
+        orcTester.skipStripeTestsEnabled = true;
+
         return orcTester;
     }
 
@@ -732,6 +736,11 @@ public class OrcTester
                 }
                 else if (type == TINYINT || type == BIGINT || type == INTEGER || type == SMALLINT) {
                     if (!filter.testLong(((Number) value).longValue())) {
+                        return false;
+                    }
+                }
+                else if (type == DOUBLE) {
+                    if (!filter.testDouble((double) value)) {
                         return false;
                     }
                 }
