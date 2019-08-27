@@ -21,6 +21,7 @@ import com.google.common.base.Splitter;
 import com.google.common.collect.ImmutableMap;
 import org.testng.annotations.Test;
 
+import java.nio.file.Paths;
 import java.util.List;
 import java.util.Optional;
 import java.util.function.Function;
@@ -38,7 +39,7 @@ public class TestHivePushdownFilterQueries
     private static final Pattern ARRAY_SUBSCRIPT_PATTERN = Pattern.compile("([a-z_+]+)((\\[[0-9]+\\])+)");
 
     private static final String WITH_LINEITEM_EX = "WITH lineitem_ex AS (\n" +
-            "SELECT linenumber, orderkey, partkey, suppkey, quantity, extendedprice, tax, \n" +
+            "SELECT linenumber, orderkey, partkey, suppkey, quantity, extendedprice, \n" +
             "   CASE WHEN linenumber % 5 = 0 THEN null ELSE shipmode = 'AIR' END AS ship_by_air, \n" +
             "   CASE WHEN linenumber % 7 = 0 THEN null ELSE returnflag = 'R' END AS is_returned, \n" +
             "   CASE WHEN linenumber % 4 = 0 THEN null ELSE CAST(day(shipdate) AS TINYINT) END AS ship_day, " +
@@ -57,7 +58,10 @@ public class TestHivePushdownFilterQueries
             "       (CAST(day(shipdate) AS TINYINT), CAST(month(shipdate) AS TINYINT), CAST(year(shipdate) AS INTEGER)), " +
             "       (CAST(day(commitdate) AS TINYINT), CAST(month(commitdate) AS TINYINT), CAST(year(commitdate) AS INTEGER)), " +
             "       (CAST(day(receiptdate) AS TINYINT), CAST(month(receiptdate) AS TINYINT), CAST(year(receiptdate) AS INTEGER))) END AS dates, \n" +
-            "   CASE WHEN partkey % 31  = 0 THEN null ELSE discount END as discount \n" +
+            "   CASE WHEN partkey % 31  = 0 THEN null ELSE discount END as discount, \n" +
+            "   CASE WHEN partkey % 37  = 0 THEN null ELSE tax END as tax, \n" +
+            "   (CAST(null as DOUBLE), CAST(null as DOUBLE), CAST(null as DOUBLE)) as array_nulls_double, \n" +
+            "   CAST(null AS DOUBLE) as allnulls_double \n" +
             "FROM lineitem)\n";
 
     protected TestHivePushdownFilterQueries()
@@ -72,11 +76,11 @@ public class TestHivePushdownFilterQueries
                 ImmutableMap.of("experimental.pushdown-subfields-enabled", "true"),
                 "sql-standard",
                 ImmutableMap.of("hive.pushdown-filter-enabled", "true"),
-                Optional.empty());
+                Optional.of(Paths.get("/Users/red/aria/test_data")));
 
         queryRunner.execute(noPushdownFilter(queryRunner.getDefaultSession()),
-                "CREATE TABLE lineitem_ex (linenumber, orderkey, partkey, suppkey, quantity, extendedprice, tax, ship_by_air, is_returned, ship_day, ship_month, ship_timestamp, commit_timestamp, discount_real, tax_real, keys, keys_double, nested_keys, flags, reals, info, dates, discount) AS " +
-                        "SELECT linenumber, orderkey, partkey, suppkey, quantity, extendedprice, tax, " +
+                "CREATE TABLE IF NOT EXISTS lineitem_ex (linenumber, orderkey, partkey, suppkey, quantity, extendedprice, ship_by_air, is_returned, ship_day, ship_month, ship_timestamp, commit_timestamp, discount_real, tax_real, keys, keys_double, nested_keys, flags, reals, info, dates, discount, tax, array_nulls_double, allnulls_double) AS " +
+                        "SELECT linenumber, orderkey, partkey, suppkey, quantity, extendedprice, " +
                         "   IF (linenumber % 5 = 0, null, shipmode = 'AIR') AS ship_by_air, " +
                         "   IF (linenumber % 7 = 0, null, returnflag = 'R') AS is_returned, " +
                         "   IF (linenumber % 4 = 0, null, CAST(day(shipdate) AS TINYINT)) AS ship_day, " +
@@ -96,8 +100,12 @@ public class TestHivePushdownFilterQueries
                         "       CAST(ROW(day(shipdate), month(shipdate), year(shipdate)) AS ROW(day TINYINT, month TINYINT, year INTEGER)), " +
                         "       CAST(ROW(day(commitdate), month(commitdate), year(commitdate)) AS ROW(day TINYINT, month TINYINT, year INTEGER)), " +
                         "       CAST(ROW(day(receiptdate), month(receiptdate), year(receiptdate)) AS ROW(day TINYINT, month TINYINT, year INTEGER))]), " +
-                        "   IF (partkey % 31  = 0, null, discount) " +
+                        "   IF (partkey % 31  = 0, null, discount) as discount, " +
+                        "   IF (partkey % 37  = 0, null , tax) as tax, " +
+                        "   ARRAY[CAST(NULL AS DOUBLE), CAST(NULL AS DOUBLE), CAST(NULL AS DOUBLE)] AS array_nulls_double, " +
+                        "   CAST(NULL AS DOUBLE) as allnulls_double " +
                         "FROM lineitem");
+
         return queryRunner;
     }
 
@@ -203,6 +211,14 @@ public class TestHivePushdownFilterQueries
 
         assertQueryUsingH2Cte("SELECT quantity * (1 - discount) * (1 + tax), discount * quantity FROM lineitem_ex WHERE is_returned = true");
 
+        assertQueryUsingH2Cte("SELECT allnulls_double FROM lineitem_ex WHERE tax > .01");
+
+        assertQueryUsingH2Cte("SELECT * FROM lineitem_ex WHERE array_nulls_double[1] > 1");
+
+        assertQueryUsingH2Cte("SELECT is_returned, array_nulls_double FROM lineitem_ex WHERE is_returned AND array_nulls_double[1] IS NULL");
+
+        assertQueryUsingH2Cte("SELECT orderkey FROM lineitem_ex WHERE allnulls_double IS NOT NULL");
+
         // Basic
         assertQuery("SELECT quantity, extendedprice, discount, tax FROM lineitem");
 
@@ -239,12 +255,17 @@ public class TestHivePushdownFilterQueries
 
         assertFilterProject("discount + tax  > .05 AND discount > .01 AND tax > .01", "tax");
 
+        // for compact nulls
+        assertFilterProject("discount + tax  > .05 AND (tax > .01 OR tax IS NULL) AND (discount > .01 OR discount IS NULL)", "discount");
+        // for allnulls in block view
+        assertFilterProject("allnulls_double < tax", "discount");
+
         // Arrays / non-deterministic
         assertFilterProject("keys_double[1] > 0.01", "count(*)");
 
         assertFilterProject("discount IS NULL AND keys_double[1] * discount > 0.01", "count(*)");
 
-        assertFilterProject("keys_double[2] IS NOT NULL AND keys_double[1] is NULL", "keys_double[2]");
+        assertFilterProject("keys_double[2] IS NOT NULL AND keys_double[1] IS NULL", "keys_double");
     }
 
     @Test
