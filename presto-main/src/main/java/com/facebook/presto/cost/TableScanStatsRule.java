@@ -72,7 +72,7 @@ public class TableScanStatsRule
                 .build());
     }
 
-    private VariableStatsEstimate toSymbolStatistics(TableStatistics tableStatistics, ColumnStatistics columnStatistics)
+    public static VariableStatsEstimate toSymbolStatistics(TableStatistics tableStatistics, ColumnStatistics columnStatistics)
     {
         double nullsFraction = columnStatistics.getNullsFraction().getValue();
         double nonNullRowsCount = tableStatistics.getRowCount().getValue() * (1.0 - nullsFraction);

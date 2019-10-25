@@ -574,6 +574,29 @@ public class TestHiveLogicalPlanner
         }
     }
 
+    // Make sure pushdown filters are correctly understood by the CBO
+    @Test
+    public void testPushdownFilterUpdatesTableStatistics()
+    {
+        Session pushdownFilterEnabled = Session.builder(pushdownFilterEnabled())
+                .setSystemProperty(JOIN_REORDERING_STRATEGY, FeaturesConfig.JoinReorderingStrategy.AUTOMATIC.name())
+                .build();
+
+        // lineitem is larger than orders
+        assertPlan(pushdownFilterEnabled, "SELECT a.discount, a.orderkey, b.totalprice FROM orders b, lineitem a WHERE a.orderkey = b.orderkey AND a.quantity < 2 AND b.totalprice BETWEEN 0 AND 200000",
+                anyTree(
+                        node(JoinNode.class,
+                                anyTree(tableScan("orders", ImmutableMap.of())),
+                                anyTree(tableScan("lineitem", ImmutableMap.of())))));
+
+        // but lineitem filtered is smaller than orders filtered
+        assertPlan(pushdownFilterEnabled, "SELECT a.discount, a.orderkey, b.totalprice FROM orders b, lineitem a WHERE a.orderkey = b.orderkey AND a.quantity < 2 AND b.totalprice BETWEEN 0 AND 200000",
+                anyTree(
+                        node(JoinNode.class,
+                                anyTree(tableScan("orders", ImmutableMap.of())),
+                                anyTree(tableScan("lineitem", ImmutableMap.of())))));
+    }
+
     private static Set<Subfield> toSubfields(String... subfieldPaths)
     {
         return Arrays.stream(subfieldPaths)
