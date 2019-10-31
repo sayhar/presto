@@ -745,8 +745,8 @@ public abstract class AbstractTestHiveClient
                         tupleDomain,
                         Optional.empty(),
                         Optional.empty(),
-                        false,
-                        "layout"),
+                        "layout",
+                        false),
                 Optional.empty(),
                 TupleDomain.withColumnDomains(ImmutableMap.of(
                         dsColumn, Domain.create(ValueSet.ofRanges(Range.equal(createUnboundedVarcharType(), utf8Slice("2012-12-29"))), false),
