@@ -34,7 +34,7 @@ public interface DomainTranslator
         Optional<T> extract(RowExpression expression, Domain domain);
     }
 
-    RowExpression toPredicate(TupleDomain<VariableReferenceExpression> tupleDomain);
+    RowExpression toPredicate(TupleDomain<RowExpression> tupleDomain);
 
     /**
      * Convert a RowExpression predicate into an ExtractionResult consisting of:

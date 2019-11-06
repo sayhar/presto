@@ -928,8 +928,8 @@ public class TestRowExpressionDomainTranslator
         assertEquals(
                 toPredicate(fromPredicate(expression).getTupleDomain()),
                 and(
-                        greaterThan(C_BIGINT, bigintLiteral(0)),
-                        greaterThan(C_DOUBLE, doubleLiteral(0))));
+                        greaterThan(C_DOUBLE, doubleLiteral(0)),
+                        greaterThan(C_BIGINT, bigintLiteral(0))));
     }
 
     @Test
@@ -1151,7 +1151,7 @@ public class TestRowExpressionDomainTranslator
 
     private RowExpression toPredicate(TupleDomain<VariableReferenceExpression> tupleDomain)
     {
-        return domainTranslator.toPredicate(tupleDomain);
+        return domainTranslator.toPredicate(tupleDomain.transform(variableReferenceExpression -> (RowExpression) variableReferenceExpression));
     }
 
     private ExtractionResult fromPredicate(RowExpression originalPredicate)
